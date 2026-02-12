@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Optional
 
 import cv2
+import imageio
 import numpy as np
+import pandas as pd
 import streamlit as st
 from ultralytics import YOLO
+
+
+def bgr_to_rgb(frame_bgr: np.ndarray) -> np.ndarray:
+    return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
 
 def load_model(model_path: str) -> YOLO:
@@ -85,7 +90,10 @@ with tab_photo:
 
 with tab_video:
     vid_file = st.file_uploader("Upload video (mp4)", type=["mp4", "mov", "m4v", "avi"])
-    start = st.button("Start video processing")
+    col1, col2 = st.columns([1, 1])
+    start = col1.button("Start video processing")
+    save_annotated = col2.checkbox("Save annotated video (mp4)", value=True)
+
     if vid_file and start:
         tmp_path = Path("tmp_input_video")
         tmp_path.mkdir(exist_ok=True)
@@ -97,52 +105,158 @@ with tab_video:
             st.error("Cannot open video.")
             st.stop()
 
+        # read video metadata
+        src_fps = cap.get(cv2.CAP_PROP_FPS)
+        if not src_fps or src_fps <= 1e-3:
+            src_fps = 25.0
+
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+
+        if width == 0 or height == 0:
+            # fallback: read one frame to get shape
+            ok, frame0 = cap.read()
+            if not ok:
+                st.error("Video has no frames.")
+                st.stop()
+            height, width = frame0.shape[:2]
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+        out_dir = Path("outputs")
+        out_dir.mkdir(exist_ok=True)
+        out_path = out_dir / f"annotated_{int(time.time())}.mp4"
+
+        writer = None
+        if save_annotated:
+            # imageio writer (ffmpeg) - stable on mac
+            writer = imageio.get_writer(
+                str(out_path),
+                fps=float(min(src_fps, max_fps)),
+                codec="libx264",
+                format="FFMPEG"
+            )
+
         frame_slot = st.empty()
         stat_slot = st.empty()
+        table_slot = st.empty()
+
+        # logging per frame
+        rows: list[dict] = []
 
         frame_idx = 0
         people_sum = 0
         people_max = 0
 
         last_ui = time.time()
+        infer_times: list[float] = []
 
         while True:
             ok, frame = cap.read()
             if not ok:
                 break
 
+            t0 = time.time()
             if frame_idx % infer_every_n == 0:
                 vis, summary = annotate_frame(model, frame, conf, iou)
             else:
-                vis = frame  # без інференсу на цьому кадрі
+                vis = frame
                 summary = {"people_detected": 0, "best_conf": 0.0}
+            t1 = time.time()
+
+            infer_ms = (t1 - t0) * 1000.0
+            infer_times.append(infer_ms)
 
             people = int(summary["people_detected"])
             people_sum += people
             people_max = max(people_max, people)
 
+            # UI FPS (rough)
             now = time.time()
             ui_fps = 1.0 / (now - last_ui) if now > last_ui else 0.0
             last_ui = now
 
-            frame_slot.image(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB), use_container_width=True)
             avg_people = people_sum / max(1, frame_idx + 1)
+            avg_infer_ms = float(np.mean(infer_times)) if infer_times else 0.0
+
+            # show frame
+            frame_slot.image(bgr_to_rgb(vis), use_container_width=True)
+
             stat_slot.markdown(
                 f"""
                 ### Stats
                 - Frame: **{frame_idx}**
                 - UI FPS: **{ui_fps:.1f}**
+                - Inference avg (ms): **{avg_infer_ms:.1f}**
                 - People (current): **{people}**
                 - People (avg): **{avg_people:.2f}**
                 - People (max): **{people_max}**
                 """
             )
 
+            # write annotated video
+            if writer is not None:
+                writer.append_data(bgr_to_rgb(vis))
+
+            # log row
+            rows.append(
+                {
+                    "frame": frame_idx,
+                    "people": people,
+                    "best_conf": float(summary["best_conf"]),
+                    "infer_ms": float(infer_ms),
+                    "ui_fps": float(ui_fps),
+                }
+            )
+
             frame_idx += 1
+
+            # throttle UI
             target_dt = 1.0 / float(max_fps)
             spent = time.time() - now
             if spent < target_dt:
                 time.sleep(target_dt - spent)
 
+            # light live table update every ~30 frames
+            if frame_idx % 30 == 0:
+                df_live = pd.DataFrame(rows[-300:])  # last 300 frames
+                table_slot.dataframe(df_live, use_container_width=True)
+
         cap.release()
+        if writer is not None:
+            writer.close()
+
+        # final logs
+        df = pd.DataFrame(rows)
+        csv_path = out_dir / f"stats_{int(time.time())}.csv"
+        df.to_csv(csv_path, index=False)
+
         st.success("Video processing finished.")
+
+        st.subheader("Summary")
+        st.write(
+            {
+                "frames": int(df.shape[0]),
+                "avg_people": float(df["people"].mean()) if not df.empty else 0.0,
+                "max_people": int(df["people"].max()) if not df.empty else 0,
+                "avg_infer_ms": float(df["infer_ms"].mean()) if not df.empty else 0.0,
+            }
+        )
+
+        st.subheader("Per-frame log (CSV)")
+        st.dataframe(df.head(50), use_container_width=True)
+        st.download_button(
+            "Download CSV log",
+            data=csv_path.read_bytes(),
+            file_name=csv_path.name,
+            mime="text/csv",
+        )
+
+        if save_annotated and out_path.exists():
+            st.subheader("Annotated video")
+            st.video(str(out_path))
+            st.download_button(
+                "Download annotated video",
+                data=out_path.read_bytes(),
+                file_name=out_path.name,
+                mime="video/mp4",
+            )
