@@ -1,3 +1,5 @@
 .idea
 .venv
 /dataset/
+/runs/
+/tmp_input_video/
