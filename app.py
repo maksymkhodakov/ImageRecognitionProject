@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+import tempfile
+import os
 import cv2
 import imageio
 import numpy as np
@@ -50,6 +52,12 @@ def annotate_frame(model: YOLO, frame_bgr: np.ndarray, conf: float, iou: float) 
 
 st.set_page_config(page_title="Pedestrian Detector", layout="wide")
 st.title("Pedestrian Detection (Baseline vs Fine-tuned)")
+if "processed_video_bytes" not in st.session_state:
+    st.session_state.processed_video_bytes = None
+
+if "processed_csv_bytes" not in st.session_state:
+    st.session_state.processed_csv_bytes = None
+
 
 models = {
     "Baseline (yolov8n.pt)": "models/yolov8n.pt",
@@ -89,10 +97,14 @@ with tab_photo:
             f"**People detected:** {summary['people_detected']}  \n**Best confidence:** {summary['best_conf']:.2f}")
 
 with tab_video:
+    if "processed_video_bytes" not in st.session_state:
+        st.session_state.processed_video_bytes = None
+    if "processed_csv_bytes" not in st.session_state:
+        st.session_state.processed_csv_bytes = None
+
     vid_file = st.file_uploader("Upload video (mp4)", type=["mp4", "mov", "m4v", "avi"])
-    col1, col2 = st.columns([1, 1])
-    start = col1.button("Start video processing")
-    save_annotated = col2.checkbox("Save annotated video (mp4)", value=True)
+    start = st.button("Start video processing")
+    save_annotated = True
 
     if vid_file and start:
         tmp_path = Path("tmp_input_video")
@@ -122,9 +134,9 @@ with tab_video:
             height, width = frame0.shape[:2]
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
-        out_dir = Path("outputs")
-        out_dir.mkdir(exist_ok=True)
-        out_path = out_dir / f"annotated_{int(time.time())}.mp4"
+        tmp_out = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+        out_path = Path(tmp_out.name)
+        tmp_out.close()
 
         writer = None
         if save_annotated:
@@ -227,8 +239,6 @@ with tab_video:
 
         # final logs
         df = pd.DataFrame(rows)
-        csv_path = out_dir / f"stats_{int(time.time())}.csv"
-        df.to_csv(csv_path, index=False)
 
         st.success("Video processing finished.")
 
@@ -242,21 +252,36 @@ with tab_video:
             }
         )
 
+        csv_bytes = df.to_csv(index=False).encode("utf-8")
+        st.session_state.processed_csv_bytes = csv_bytes
+
         st.subheader("Per-frame log (CSV)")
         st.dataframe(df.head(50), use_container_width=True)
-        st.download_button(
-            "Download CSV log",
-            data=csv_path.read_bytes(),
-            file_name=csv_path.name,
-            mime="text/csv",
-        )
 
         if save_annotated and out_path.exists():
-            st.subheader("Annotated video")
-            st.video(str(out_path))
-            st.download_button(
-                "Download annotated video",
-                data=out_path.read_bytes(),
-                file_name=out_path.name,
-                mime="video/mp4",
-            )
+            video_bytes = out_path.read_bytes()
+            st.session_state.processed_video_bytes = video_bytes
+
+            # clean temp file
+            try:
+                os.remove(out_path)
+            except Exception:
+                pass
+
+    if st.session_state.processed_video_bytes is not None:
+        st.subheader("Annotated video")
+        st.video(st.session_state.processed_video_bytes)
+        st.download_button(
+            "Download annotated video",
+            data=st.session_state.processed_video_bytes,
+            file_name="annotated_video.mp4",
+            mime="video/mp4",
+        )
+
+    if st.session_state.processed_csv_bytes is not None:
+        st.download_button(
+            "Download CSV log",
+            data=st.session_state.processed_csv_bytes,
+            file_name="video_stats.csv",
+            mime="text/csv",
+        )
