@@ -21,16 +21,17 @@ def load_model(model_path: str) -> YOLO:
     return YOLO(model_path)
 
 
-def annotate_frame(model: YOLO, frame_bgr: np.ndarray, conf: float, iou: float) -> tuple[np.ndarray, dict]:
+def annotate_frame(model: YOLO,
+                   frame_bgr: np.ndarray,
+                   conf: float,
+                   iou: float) -> tuple[np.ndarray, dict]:
     r = model.predict(source=frame_bgr, conf=conf, iou=iou, device="mps", verbose=False)[0]
+
+    vis = frame_bgr.copy()
 
     det_count = 0
     best_conf = 0.0
-    if r.boxes is not None and len(r.boxes) > 0:
-        det_count = int(len(r.boxes))
-        best_conf = float(r.boxes.conf.max().item())
 
-    vis = frame_bgr.copy()
     if r.boxes is not None and len(r.boxes) > 0:
         xyxy = r.boxes.xyxy.cpu().numpy()
         scores = r.boxes.conf.cpu().numpy()
@@ -40,7 +41,11 @@ def annotate_frame(model: YOLO, frame_bgr: np.ndarray, conf: float, iou: float) 
         for (x1, y1, x2, y2), sc, cid in zip(xyxy, scores, cls_ids):
             label = str(names.get(int(cid), cid))
             if label != "person":
-                continue  # показуємо тільки пішоходів
+                continue
+
+            det_count += 1
+            best_conf = max(best_conf, float(sc))
+
             x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
             cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(vis, f"{label} {sc:.2f}", (x1, max(0, y1 - 8)),
