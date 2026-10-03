@@ -1,6 +1,9 @@
-"""PedVision — web platform for pedestrian detection & tracking (Streamlit).
+"""PedVision — веб-платформа для виявлення та відстеження пішоходів (Streamlit).
 
-Run:
+Вкладки: Огляд · Фото · Відео й трекінг · Послідовність кадрів · Порівняння моделей · Навчання і метрики.
+Уся логіка детекції/трекінгу береться з пакета pedestrian і track.py — тут лише інтерфейс.
+
+Запуск:
     python -m streamlit run app.py
 """
 from __future__ import annotations
@@ -28,11 +31,13 @@ from track import results_to_frame, run_tracking, track_stats
 
 REPORTS = Path("reports")
 CALTECH_TEST = CALTECH_ROOT / "images" / "test" / "caltechpedestriandataset"
-MAX_KEEP_FRAMES = 600  # annotated frames kept in memory for the frame viewer
+MAX_KEEP_FRAMES = 600  # скільки анотованих кадрів тримати в пам'яті для переглядача кадрів
 
 st.set_page_config(page_title="PedVision — виявлення пішоходів", page_icon=":material/directions_walk:",
                    layout="wide", initial_sidebar_state="expanded")
 
+# Власні стилі: банер-заголовок, бейджі типу моделі, схема конвеєра, картки метрик.
+# Кольори напівпрозорі, тому інтерфейс коректно виглядає і в світлій, і в темній темі.
 st.markdown(
     """
     <style>
@@ -60,7 +65,9 @@ st.markdown(
 )
 
 
-# ---------------------------------------------------------------- helpers
+# ---------------------------------------------------------------- допоміжні функції
+# cache_resource: модель завантажується один раз і спільно використовується між перезапусками скрипта
+# (Streamlit перезапускає весь файл після кожної дії користувача).
 @st.cache_resource(show_spinner="Завантаження моделі…")
 def get_detector(key: str):
     return load_detector(key)
@@ -112,7 +119,7 @@ def random_sample(dataset: str) -> Path | None:
     return imgs[np.random.randint(len(imgs))] if imgs else None
 
 
-MODEL_SHORT = {"pednet": "PedNet", "yolo_caltech": "YOLOv8n Caltech-20", "yolo_old": "YOLOv8n Caltech-5",
+MODEL_SHORT = {"pednet": "PedNet", "yolo_caltech": "YOLOv8n Caltech-12", "yolo_old": "YOLOv8n Caltech-5",
                "yolo_coco": "YOLOv8n COCO"}
 MODEL_COLORS = {"pednet": "#2a78d6", "yolo_caltech": "#e0702b", "yolo_old": "#8a63c9", "yolo_coco": "#8a8a8a"}
 
@@ -235,9 +242,14 @@ with tabs[1]:
                                icon=":material/download:")
 
 
-# ---------------------------------------------------------------- shared live tracking UI
+# ---------------------------------------------------------------- спільний блок живого трекінгу
 def live_tracking(frames, total: int | None, fps_out: float, out_name: str, keep_frames: bool = False):
-    """Run detector + SORT over frames, rendering progress live. Stores results in session_state."""
+    """Детектор + SORT по всіх кадрах з живим відображенням прогресу та метрик.
+
+    Результат (список прямокутників, відео MP4, статистика) зберігається в st.session_state[out_name],
+    щоб він не зникав після натискання кнопок завантаження (Streamlit перезапускає скрипт).
+    Відео пишеться кодеком H.264 (libx264), який відтворюється безпосередньо в браузері.
+    """
     progress = st.progress(0.0, text="Обробка…")
     k1, k2, k3, k4 = st.columns(4)
     kpi = [k.empty() for k in (k1, k2, k3, k4)]
@@ -253,6 +265,7 @@ def live_tracking(frames, total: int | None, fps_out: float, out_name: str, keep
         seen_ids.update(int(t[5]) for t in tracks)
         if keep_frames and len(kept) < MAX_KEEP_FRAMES:
             kept.append(cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes())
+        # оновлюємо інтерфейс кожен 3-й кадр — частіше лише сповільнює обробку
         if idx % 3 == 0 or (total and idx == total - 1):
             view.image(rgb(vis), width="stretch")
             fps = (idx + 1) / max(time.time() - t_start, 1e-6)
@@ -275,6 +288,7 @@ def live_tracking(frames, total: int | None, fps_out: float, out_name: str, keep
 
 
 def show_tracking_result(state: dict, prefix: str):
+    """Підсумок обробки: картки метрик, графік кількості пішоходів у часі, кнопки завантаження."""
     s = state["stats"]
     st.success(f"Оброблено {s['frames']} кадрів моделлю «{state['model']}».", icon=":material/check_circle:")
     m = st.columns(5)
@@ -473,7 +487,7 @@ with tabs[4]:
 # ---------------------------------------------------------------- training
 with tabs[5]:
     hist = Path("runs/pednet/history.csv")
-    yolo_res = sorted(Path("runs").rglob("caltech_v8n_e20/results.csv"))
+    yolo_res = sorted(Path("runs").rglob("caltech_v8n*/results.csv"), key=lambda f: f.stat().st_mtime)[-1:]
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("#### PedNet — власний цикл навчання")

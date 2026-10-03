@@ -1,4 +1,4 @@
-"""Static figures for the report: pipeline scheme, PedNet architecture, dataset examples, heatmap demo."""
+"""Статичні рисунки для звіту: схема конвеєра, архітектура PedNet, приклади з датасетів, цільова heatmap."""
 from __future__ import annotations
 
 import sys

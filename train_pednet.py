@@ -1,8 +1,15 @@
-"""Train PedNet (own anchor-free detector) on Caltech Pedestrian.
+"""Навчання власної моделі PedNet на Caltech Pedestrian (власний цикл навчання на PyTorch).
 
-Example:
+Що відбувається:
+  * завантажуються кожен 2-й кадр train і кожен 4-й кадр val (сусідні кадри відео майже однакові);
+  * оптимізатор AdamW: менший learning rate для попередньо навченого backbone, більший — для нових шарів;
+  * розклад швидкості навчання: лінійний warmup, потім косинусне зменшення;
+  * після кожної епохи — AP50 на валідації; найкраща модель зберігається в models/pednet_best.pt;
+  * історія (втрати та метрики по епохах) пишеться в runs/pednet/history.csv.
+
+Приклади:
     python train_pednet.py --epochs 25
-    python train_pednet.py --epochs 1 --limit 200      # smoke test
+    python train_pednet.py --epochs 1 --limit 200      # швидка перевірка, що все працює
 """
 from __future__ import annotations
 
@@ -42,7 +49,11 @@ def parse_args():
 
 @torch.no_grad()
 def validate(model: PedNet, loader: DataLoader, device: str) -> dict:
-    model.eval()
+    """Прогін валідаційної вибірки та обчислення метрик власним модулем metrics.py.
+
+    conf=0.01 — низький поріг, щоб побудувати повну криву Precision–Recall.
+    """
+    model.eval()  # BatchNorm у режимі інференсу
     per_image = []
     for imgs, _, boxes in loader:
         dets = decode(model(imgs.to(device)), stride=model.cfg.stride, conf=0.01)
@@ -55,6 +66,7 @@ def validate(model: PedNet, loader: DataLoader, device: str) -> dict:
 
 def main() -> None:
     a = parse_args()
+    # фіксуємо генератори випадкових чисел для відтворюваності
     torch.manual_seed(0)
     np.random.seed(0)
     out_dir = Path(a.out_dir)
@@ -72,11 +84,12 @@ def main() -> None:
     train_dl = DataLoader(train_ds, a.batch, shuffle=True, drop_last=True, **kw)
     val_dl = DataLoader(val_ds, a.batch, shuffle=False, **kw)
 
-    model = PedNet(cfg).to(a.device)
+    model = PedNet(cfg).to(a.device)  # backbone ініціалізується вагами ImageNet
     print(f"PedNet: {count_parameters(model) / 1e6:.2f}M parameters | train {len(train_ds)} | val {len(val_ds)} "
           f"| device {a.device}")
 
-    # lower LR for the pretrained backbone, full LR for the new neck/heads
+    # Дві групи параметрів: backbone вже вміє виділяти ознаки (ImageNet), тому його донавчаємо
+    # обережніше (lr * 0.5); FPN і голови навчаються з нуля — повний lr.
     backbone = list(model.backbone.parameters())
     bb_ids = {id(p) for p in backbone}
     rest = [p for p in model.parameters() if id(p) not in bb_ids]
@@ -105,17 +118,19 @@ def main() -> None:
         t0 = time.time()
         sums = {"loss": 0.0, "hm": 0.0, "size": 0.0, "off": 0.0}
         for bi, (imgs, t, _) in enumerate(train_dl):
-            # linear warmup + cosine decay
+            # Розклад lr: перші warmup_iters ітерацій — лінійне зростання від 0 (стабільний старт,
+            # поки голови видають випадкові значення), далі — косинусне зменшення до 1% від початкового.
             f = (it + 1) / a.warmup_iters if it < a.warmup_iters else \
                 0.5 * (1 + math.cos(math.pi * (it - a.warmup_iters) / max(1, total_iters - a.warmup_iters)))
             for g, lr0 in zip(opt.param_groups, base_lrs):
                 g["lr"] = lr0 * max(f, 0.01)
             imgs = imgs.to(a.device, non_blocking=True)
             t = {k: v.to(a.device, non_blocking=True) for k, v in t.items()}
+            # прямий прохід -> функція втрат -> зворотне поширення -> крок оптимізатора
             losses = pednet_loss(model(imgs), t)
             opt.zero_grad(set_to_none=True)
             losses["loss"].backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 10.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 10.0)  # захист від «вибуху» градієнтів
             opt.step()
             for k in sums:
                 sums[k] += losses[k].item()
@@ -134,6 +149,7 @@ def main() -> None:
         print(f"== epoch {epoch + 1}: " + ", ".join(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}"
                                                     for k, v in row.items()), flush=True)
 
+        # last.pt — для продовження навчання (--resume); best.pt — найкраща за val AP50
         model.save(str(out_dir / "last.pt"), epoch=epoch, optimizer=opt.state_dict(), best_ap=best_ap)
         if val["val_ap50"] > best_ap:
             best_ap = val["val_ap50"]

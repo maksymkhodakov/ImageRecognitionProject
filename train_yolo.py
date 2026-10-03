@@ -1,11 +1,13 @@
-"""Fine-tune YOLOv8 on Caltech Pedestrian (comparison model for PedNet).
+"""Донавчання YOLOv8n на Caltech Pedestrian — модель для порівняння з власною PedNet.
 
-Caltech frames are consecutive video frames, so neighbouring images are almost
-identical. To keep training time reasonable on Apple M1 we train on every
-`--train-step`-th frame and validate on every `--val-step`-th frame.
+Кадри Caltech — послідовні кадри відео, сусідні майже однакові. Щоб навчання на Apple M1
+тривало розумний час, використовується кожен `--train-step`-й кадр для навчання
+та кожен `--val-step`-й — для валідації (списки файлів пишуться в dataset/lists/).
+Навчання виконує бібліотека Ultralytics; ми лише готуємо дані й параметри.
 
-Example:
-    python train_yolo.py --epochs 20 --name caltech_v8n_e20
+Приклади:
+    python train_yolo.py --epochs 12 --name caltech_v8n_e20
+    python train_yolo.py --resume runs/detect/runs/yolo/caltech_v8n_e20/weights/last.pt
 """
 from __future__ import annotations
 
@@ -22,8 +24,9 @@ from pedestrian.device import pick_device
 
 @dataclass(frozen=True)
 class TrainConfig:
+    """Параметри навчання (значення за замовчуванням — ті, з якими навчено модель у звіті)."""
     base_model: str = "models/yolov8n.pt"
-    epochs: int = 20
+    epochs: int = 12
     imgsz: int = 640
     batch: int = 16
     train_step: int = 2
@@ -37,7 +40,7 @@ class TrainConfig:
 
 
 def write_subset_yaml(cfg: TrainConfig) -> Path:
-    """Write image lists with every N-th frame and a data yaml pointing to them."""
+    """Пише списки зображень (кожен N-й кадр) і data.yaml для Ultralytics, що на них посилається."""
     out_dir = Path("dataset/lists")
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = {}
@@ -59,7 +62,7 @@ def write_subset_yaml(cfg: TrainConfig) -> Path:
 
 
 def main(cfg: TrainConfig, resume: str = "") -> None:
-    if resume:  # continue an interrupted run from its last.pt
+    if resume:  # продовження перерваного навчання з його last.pt
         model = YOLO(resume)
         model.train(resume=True)
         export_best(model, cfg)
@@ -74,8 +77,8 @@ def main(cfg: TrainConfig, resume: str = "") -> None:
         device=cfg.device,
         workers=cfg.workers,
         patience=cfg.patience,
-        cos_lr=True,
-        single_cls=True,
+        cos_lr=True,        # косинусний розклад learning rate
+        single_cls=True,    # один клас — person
         project=cfg.project,
         name=cfg.name,
         exist_ok=True,
@@ -86,6 +89,7 @@ def main(cfg: TrainConfig, resume: str = "") -> None:
 
 
 def export_best(model: YOLO, cfg: TrainConfig) -> None:
+    """Копіює найкращі ваги (за val mAP) у models/, звідки їх бере решта проєкту."""
     best = Path(model.trainer.save_dir) / "weights" / "best.pt"
     if best.exists():
         shutil.copy(best, cfg.export_to)

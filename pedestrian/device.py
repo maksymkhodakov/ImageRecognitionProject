@@ -1,3 +1,4 @@
+"""Вибір обчислювального пристрою для PyTorch."""
 from __future__ import annotations
 
 import os
@@ -6,7 +7,11 @@ import torch
 
 
 def pick_device(prefer: str | None = None) -> str:
-    """Return the best available torch device: cuda -> mps -> cpu."""
+    """Повертає найкращий доступний пристрій: cuda (NVIDIA) -> mps (Apple Silicon) -> cpu.
+
+    Пріоритет: явно переданий prefer > змінна середовища PED_DEVICE > автовизначення.
+    PED_DEVICE=cpu корисна, коли GPU зайнятий навчанням, а потрібно щось швидко перевірити.
+    """
     if prefer:
         return prefer
     if os.environ.get("PED_DEVICE"):

@@ -1,4 +1,8 @@
-"""Common interface for all pedestrian detectors: frame (BGR) -> boxes (N, 5) xyxy + score."""
+"""Єдиний інтерфейс для всіх детекторів пішоходів: кадр (BGR) -> прямокутники (N, 5) x1, y1, x2, y2, score.
+
+Завдяки спільному інтерфейсу Detector решта коду (трекінг, оцінка, веб-інтерфейс) не залежить
+від того, яка модель працює всередині — власна PedNet чи YOLO від Ultralytics.
+"""
 from __future__ import annotations
 
 import time
@@ -15,19 +19,21 @@ from pedestrian.pednet import PedNet, count_parameters, decode
 
 @dataclass
 class ModelInfo:
-    key: str
-    title: str
-    path: str
-    kind: str          # "pednet" | "yolo"
-    origin: str        # "own" | "fine-tuned" | "pretrained"
+    """Опис моделі для реєстру та інтерфейсу."""
+    key: str           # короткий ідентифікатор (використовується в CLI та CSV)
+    title: str         # назва для людини
+    path: str          # шлях до файлу ваг
+    kind: str          # "pednet" | "yolo" — який клас-обгортку використовувати
+    origin: str        # "own" (власна) | "fine-tuned" (донавчена) | "pretrained" (з коробки)
     description: str
 
 
+# Реєстр усіх моделей проєкту. Порядок визначає порядок у таблицях і списках інтерфейсу.
 MODEL_ZOO: dict[str, ModelInfo] = {
     "pednet": ModelInfo("pednet", "PedNet (власна модель)", "models/pednet_best.pt", "pednet", "own",
                         "Anchor-free детектор центрів пішоходів: MobileNetV3 + власні FPN та голови, "
                         "навчений у проєкті на Caltech."),
-    "yolo_caltech": ModelInfo("yolo_caltech", "YOLOv8n, донавчена на Caltech (20 епох)",
+    "yolo_caltech": ModelInfo("yolo_caltech", "YOLOv8n, донавчена на Caltech (12 епох)",
                               "models/yolo_caltech_v8n.pt", "yolo", "fine-tuned",
                               "YOLOv8n, донавчена на Caltech Pedestrian у цьому проєкті."),
     "yolo_old": ModelInfo("yolo_old", "YOLOv8n, донавчена (5 епох, попередня версія)",
@@ -41,9 +47,11 @@ ORIGIN_LABELS = {"own": "власна", "fine-tuned": "донавчена", "pre
 
 
 class Detector:
+    """Базовий клас. Нащадки реалізують predict() та n_params()."""
     info: ModelInfo
 
     def predict(self, frame_bgr: np.ndarray, conf: float = 0.25, iou: float = 0.5) -> np.ndarray:
+        """Повертає масив (N, 5): x1, y1, x2, y2, score у пікселях вхідного кадру."""
         raise NotImplementedError
 
     def n_params(self) -> int:
@@ -53,12 +61,15 @@ class Detector:
         return Path(self.info.path).stat().st_size / 2 ** 20
 
     def timed_predict(self, frame_bgr, conf=0.25, iou=0.5):
+        """predict() + час виконання в мілісекундах (включно з пре- та постобробкою)."""
         t0 = time.perf_counter()
         boxes = self.predict(frame_bgr, conf, iou)
         return boxes, (time.perf_counter() - t0) * 1000.0
 
 
 class PedNetDetector(Detector):
+    """Обгортка для власної моделі PedNet."""
+
     def __init__(self, info: ModelInfo, device: str | None = None):
         self.info = info
         self.device = pick_device(device)
@@ -67,9 +78,12 @@ class PedNetDetector(Detector):
 
     @torch.no_grad()
     def predict(self, frame_bgr, conf=0.25, iou=0.5):
+        # 1) приводимо кадр до розміру входу мережі зі збереженням пропорцій
         img, s, (px, py) = letterbox(frame_bgr, self.size)
+        # 2) прямий прохід + декодування heatmap у прямокутники
         out = self.model(normalize(img)[None].to(self.device))
         d = decode(out, self.model.cfg.stride, conf=conf, nms_iou=iou)[0].numpy()
+        # 3) переводимо координати назад у систему оригінального кадру (обернений letterbox)
         if len(d):
             d[:, [0, 2]] = (d[:, [0, 2]] - px) / s
             d[:, [1, 3]] = (d[:, [1, 3]] - py) / s
@@ -82,6 +96,8 @@ class PedNetDetector(Detector):
 
 
 class YOLODetector(Detector):
+    """Обгортка для моделей Ultralytics YOLO (донавчених однокласових або COCO на 80 класів)."""
+
     def __init__(self, info: ModelInfo, device: str | None = None):
         from ultralytics import YOLO
 
@@ -89,6 +105,7 @@ class YOLODetector(Detector):
         self.device = pick_device(device)
         self.model = YOLO(info.path)
         names = self.model.names
+        # модель COCO знає 80 класів — залишаємо лише "person"; однокласова модель — без фільтра
         self.classes = [k for k, v in names.items() if v == "person"] if len(names) > 1 else None
 
     def predict(self, frame_bgr, conf=0.25, iou=0.5):
@@ -103,6 +120,7 @@ class YOLODetector(Detector):
 
 
 def load_detector(key: str, device: str | None = None) -> Detector:
+    """Створює детектор за ключем з MODEL_ZOO; помилка, якщо файл ваг ще не існує."""
     info = MODEL_ZOO[key]
     if not Path(info.path).exists():
         raise FileNotFoundError(f"Ваги моделі не знайдено: {info.path}")
@@ -110,4 +128,5 @@ def load_detector(key: str, device: str | None = None) -> Detector:
 
 
 def available_models() -> list[str]:
+    """Ключі моделей, файли ваг яких уже є на диску."""
     return [k for k, m in MODEL_ZOO.items() if Path(m.path).exists()]

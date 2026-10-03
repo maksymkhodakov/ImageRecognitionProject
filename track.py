@@ -1,9 +1,10 @@
-"""Detect and track pedestrians in a frame sequence (folder of images) or a video.
+"""Виявлення та відстеження пішоходів на послідовності кадрів (папка зображень) або відео.
 
-Output: list of rectangles for every frame (JSON + CSV):
+Це головна програма за умовою завдання: на вхід — послідовність кадрів з камери на лобовому
+склі, на вихід — список прямокутників для кожного кадру (JSON + CSV):
     [{"frame": 0, "file": "...", "boxes": [{"track_id": 1, "x1": .., "y1": .., "x2": .., "y2": .., "conf": ..}]}]
 
-Example:
+Приклад:
     python track.py --source dataset/datasets/images/test/caltechpedestriandataset/set06 \
                     --pattern "set06_V016_*" --model pednet --out outputs/set06_V016.json --save-video
 """
@@ -26,7 +27,10 @@ from pedestrian.viz import draw_tracks
 
 
 def iter_frames(source: str, pattern: str = "*") -> Iterator[tuple[str, np.ndarray]]:
-    """Yield (name, BGR frame) from a directory of images (sorted) or a video file."""
+    """Генератор (ім'я, кадр BGR) з папки зображень (у порядку імен) або з відеофайлу.
+
+    Генератор не завантажує всі кадри в пам'ять одразу — важливо для довгих відео.
+    """
     p = Path(source)
     if p.is_dir():
         for f in sorted(x for x in p.glob(pattern) if x.suffix.lower() in IMG_EXTS):
@@ -45,7 +49,11 @@ def iter_frames(source: str, pattern: str = "*") -> Iterator[tuple[str, np.ndarr
 
 def run_tracking(detector: Detector, frames, conf: float = 0.3, iou: float = 0.5,
                  tracker: SortTracker | None = None, on_frame=None) -> list[dict]:
-    """Core pipeline: detector -> SORT -> per-frame list of boxes with track ids."""
+    """Основний конвеєр: детектор -> SORT -> для кожного кадру список прямокутників з ID.
+
+    on_frame(idx, frame, tracks, tracker, rec) — необов'язковий колбек, який викликається після
+    кожного кадру (його використовують веб-інтерфейс для живого перегляду та запис відео).
+    """
     tracker = tracker or SortTracker()
     results = []
     for idx, (name, frame) in enumerate(frames):
@@ -66,11 +74,13 @@ def run_tracking(detector: Detector, frames, conf: float = 0.3, iou: float = 0.5
 
 
 def results_to_frame(results: list[dict]) -> pd.DataFrame:
+    """Результати -> плоска таблиця: один рядок = один прямокутник на одному кадрі."""
     rows = [{"frame": r["frame"], "file": r["file"], **b} for r in results for b in r["boxes"]]
     return pd.DataFrame(rows, columns=["frame", "file", "track_id", "x1", "y1", "x2", "y2", "conf"])
 
 
 def track_stats(results: list[dict]) -> dict:
+    """Зведена статистика: кількість треків (унікальних пішоходів), середня довжина треку, швидкість."""
     df = results_to_frame(results)
     n = len(results)
     if df.empty:
@@ -104,6 +114,7 @@ def main() -> None:
     writer = None
 
     def on_frame(idx, frame, tracks, tracker, rec):
+        # запис анотованого відео: VideoWriter створюється на першому кадрі, коли відомий розмір
         nonlocal writer
         if a.save_video:
             vis = draw_tracks(frame, tracks, tracker.trails())

@@ -1,10 +1,11 @@
-"""Download INRIA Person and convert it to YOLO format (used as an independent test set).
+"""Завантаження INRIA Person та конвертація у формат YOLO (незалежна тестова вибірка).
 
-Source: Kaggle mirror `jcoral02/inriaperson` (VOC-style XML annotations).
-Credentials: ~/.kaggle/access_token (new Kaggle API token) or ~/.kaggle/kaggle.json,
-or download the archive manually and pass --archive.
+Джерело: дзеркало на Kaggle `jcoral02/inriaperson` (анотації у форматі PASCAL VOC XML).
+Авторизація: ~/.kaggle/access_token (новий API-токен Kaggle) або ~/.kaggle/kaggle.json;
+або завантажте архів вручну й передайте шлях через --archive.
+Конвертуються лише тестові зображення (Test/): 288 кадрів, 597 пішоходів.
 
-Example:
+Приклади:
     python prepare_inria.py
     python prepare_inria.py --archive ~/Downloads/inriaperson.zip
 """
@@ -25,6 +26,7 @@ OUT_DIR = Path("dataset/inria")
 
 
 def kaggle_auth_header() -> str:
+    """HTTP-заголовок авторизації Kaggle: Bearer для нового токена або Basic для kaggle.json."""
     home = Path.home() / ".kaggle"
     if (home / "access_token").exists():
         return "Authorization: Bearer " + (home / "access_token").read_text().strip()
@@ -44,6 +46,7 @@ def download(dst: Path) -> Path:
 
 
 def parse_voc(xml_bytes: bytes) -> tuple[int, int, list[tuple[float, float, float, float]]]:
+    """Розбирає VOC XML: (ширина, висота, список прямокутників xmin, ymin, xmax, ymax класу person)."""
     root = ET.fromstring(xml_bytes)
     w = int(root.findtext("size/width"))
     h = int(root.findtext("size/height"))
@@ -57,6 +60,7 @@ def parse_voc(xml_bytes: bytes) -> tuple[int, int, list[tuple[float, float, floa
 
 
 def convert(archive: Path, split: str = "Test") -> int:
+    """Читає зображення й анотації прямо з zip (без розпакування всього архіву) і пише YOLO-формат."""
     img_out = OUT_DIR / "images" / "test"
     lbl_out = OUT_DIR / "labels" / "test"
     img_out.mkdir(parents=True, exist_ok=True)
@@ -73,6 +77,7 @@ def convert(archive: Path, split: str = "Test") -> int:
             with zf.open(img_name) as src, (img_out / Path(img_name).name).open("wb") as dst:
                 shutil.copyfileobj(src, dst)
             lines = []
+            # VOC (пікселі, кути) -> YOLO (частки, центр + розмір)
             for x1, y1, x2, y2 in boxes:
                 x1, y1, x2, y2 = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
                 lines.append(f"0 {(x1 + x2) / 2 / w:.6f} {(y1 + y2) / 2 / h:.6f} {(x2 - x1) / w:.6f} {(y2 - y1) / h:.6f}")

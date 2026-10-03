@@ -1,15 +1,18 @@
-"""Evaluate all models on Caltech test and INRIA test with one protocol.
+"""Оцінка всіх моделей на Caltech test та INRIA test за єдиним протоколом.
 
-Outputs (reports/):
-    metrics.csv           P, R, F1, AP50, AP50-95, MR^-2, speed, size for every model x dataset
-    curves.npz            PR and MR-FPPI curves (used by the web UI)
-    pr_<ds>.png, mr_fppi_<ds>.png, speed.png, training_curves.png
-    tracking.csv          SORT statistics on Caltech test sequences
-    samples/              example frames with detections of every model
+Для кожної моделі та кожного датасету: детекції з низьким порогом (0.001) на всіх кадрах ->
+власні метрики (pedestrian/metrics.py) -> таблиці та графіки для звіту і веб-інтерфейсу.
 
-Example:
-    python evaluate.py                 # full evaluation
-    python evaluate.py --step 10       # quick: every 10th Caltech frame
+Результати (папка reports/):
+    metrics.csv           P, R, F1, AP50, AP50-95, MR^-2, швидкість, розмір — для кожної пари модель x датасет
+    curves.npz            криві PR та MR–FPPI (для інтерактивних графіків у веб-інтерфейсі)
+    curves_<ds>.png, speed.png, training_curves.png — графіки для звіту
+    tracking.csv          статистика SORT на найдовших послідовностях Caltech test
+    samples/              приклади кадрів з детекціями всіх моделей поруч
+
+Приклади:
+    python evaluate.py                 # повна оцінка
+    python evaluate.py --step 10       # швидко: кожен 10-й кадр Caltech
 """
 from __future__ import annotations
 
@@ -34,11 +37,15 @@ from track import iter_frames, run_tracking, track_stats
 
 REPORTS = Path("reports")
 COLORS = {"pednet": "#2a78d6", "yolo_caltech": "#e0702b", "yolo_old": "#8a63c9", "yolo_coco": "#7a7a7a"}
-SHORT = {"pednet": "PedNet (own)", "yolo_caltech": "YOLOv8n Caltech-20ep",
+SHORT = {"pednet": "PedNet (own)", "yolo_caltech": "YOLOv8n Caltech-12ep",
          "yolo_old": "YOLOv8n Caltech-5ep", "yolo_coco": "YOLOv8n COCO"}
 
 
 def collect(det, images: list[Path], warmup: int = 5):
+    """Запускає детектор на всіх зображеннях; повертає пари (детекції, істина) і середній час на кадр.
+
+    Перші `warmup` кадрів не враховуються в часі: перший прогін на GPU містить ініціалізацію.
+    """
     per_image, times = [], []
     for i, p in enumerate(images):
         img = cv2.imread(str(p))
@@ -51,6 +58,7 @@ def collect(det, images: list[Path], warmup: int = 5):
 
 
 def plot_curves(curves: dict, ds: str) -> None:
+    """Криві Precision–Recall та Miss rate–FPPI (логарифмічні осі, як у бенчмарку Caltech)."""
     fig, ax = plt.subplots(1, 2, figsize=(11, 4.2))
     for key, c in curves.items():
         if c["dataset"] != ds:
@@ -71,6 +79,7 @@ def plot_curves(curves: dict, ds: str) -> None:
 
 
 def plot_speed(df: pd.DataFrame) -> None:
+    """Горизонтальна діаграма часу обробки кадру для кожної моделі."""
     d = df[df.dataset == "Caltech"].sort_values("ms_per_frame")
     fig, ax = plt.subplots(figsize=(7, 3.2))
     ax.barh([SHORT[m] for m in d.model], d.ms_per_frame, color=[COLORS[m] for m in d.model])
@@ -85,8 +94,9 @@ def plot_speed(df: pd.DataFrame) -> None:
 
 
 def plot_training() -> None:
+    """Криві навчання PedNet (history.csv) та YOLO (results.csv від Ultralytics) на одному рисунку."""
     ped = Path("runs/pednet/history.csv")
-    yolo = sorted(Path("runs").rglob("caltech_v8n_e20/results.csv"))
+    yolo = sorted(Path("runs").rglob("caltech_v8n*/results.csv"), key=lambda f: f.stat().st_mtime)[-1:]
     if not ped.exists() and not yolo:
         return
     fig, ax = plt.subplots(1, 2, figsize=(11, 4))
@@ -111,6 +121,7 @@ def plot_training() -> None:
 
 
 def save_samples(models: list[str], detectors: dict, n: int = 4) -> None:
+    """Зберігає сітки «той самий кадр — різні моделі» для візуального порівняння."""
     out = REPORTS / "samples"
     out.mkdir(parents=True, exist_ok=True)
     imgs = list_images(CALTECH_ROOT, "test")
@@ -132,12 +143,14 @@ def save_samples(models: list[str], detectors: dict, n: int = 4) -> None:
 
 
 def longest_sequences(n: int = 5) -> list[str]:
-    """The n longest test sequences (frames of one video), in name order."""
+    """n найдовших тестових послідовностей (кадри одного відео), упорядковані за назвою."""
     seqs = pd.Series([p.stem.rsplit("_", 1)[0] for p in list_images(CALTECH_ROOT, "test")]).value_counts()
     return sorted(seqs.index[:n])
 
 
 def tracking_eval(models: list[str], detectors: dict) -> pd.DataFrame:
+    """Повна система (детектор + SORT) на найдовших послідовностях; ID у розмітці немає,
+    тому рахуємо статистику треків (кількість, довжина, швидкість), а не MOTA."""
     root = CALTECH_ROOT / "images" / "test" / "caltechpedestriandataset"
     rows = []
     for m, seq in itertools.product(models, longest_sequences()):
@@ -168,6 +181,8 @@ def main() -> None:
             if not images:
                 continue
             per_image, ms = collect(det, images)
+            # "all" — усі детекції; "h60" — протокол Caltech: розмічено лише пішоходів >= 75 px,
+            # тому незіставлені детекції нижчі за 60 px (75 / 1.25) не рахуються хибними
             for subset, min_h in (("all", 0.0), ("h60", 60.0)):
                 if ds == "INRIA" and subset == "h60":
                     continue
@@ -185,7 +200,7 @@ def main() -> None:
 
     df = pd.DataFrame(rows)
     df.to_csv(REPORTS / "metrics.csv", index=False)
-    # store curves subsampled to keep the file small
+    # криві проріджуються до ~400 точок, щоб файл був невеликим
     flat = {}
     for k, c in curves.items():
         idx = np.unique(np.linspace(0, max(len(c["rec"]) - 1, 0), 400).astype(int)) if len(c["rec"]) else []
