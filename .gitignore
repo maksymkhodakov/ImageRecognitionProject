@@ -4,3 +4,9 @@
 /runs/
 /tmp_input_video/
 /outputs/
+/report/
+/logs/
+__pycache__/
+*.pyc
+.DS_Store
+/reports/

@@ -36,7 +36,6 @@ REPORTS = Path("reports")
 COLORS = {"pednet": "#2a78d6", "yolo_caltech": "#e0702b", "yolo_old": "#8a63c9", "yolo_coco": "#7a7a7a"}
 SHORT = {"pednet": "PedNet (own)", "yolo_caltech": "YOLOv8n Caltech-20ep",
          "yolo_old": "YOLOv8n Caltech-5ep", "yolo_coco": "YOLOv8n COCO"}
-TRACK_SEQS = ["set06_V016", "set06_V002", "set07_V011", "set08_V010", "set10_V005"]
 
 
 def collect(det, images: list[Path], warmup: int = 5):
@@ -132,10 +131,16 @@ def save_samples(models: list[str], detectors: dict, n: int = 4) -> None:
         cv2.imwrite(str(out / f"{p.stem}.jpg"), np.vstack(grid), [cv2.IMWRITE_JPEG_QUALITY, 88])
 
 
+def longest_sequences(n: int = 5) -> list[str]:
+    """The n longest test sequences (frames of one video), in name order."""
+    seqs = pd.Series([p.stem.rsplit("_", 1)[0] for p in list_images(CALTECH_ROOT, "test")]).value_counts()
+    return sorted(seqs.index[:n])
+
+
 def tracking_eval(models: list[str], detectors: dict) -> pd.DataFrame:
     root = CALTECH_ROOT / "images" / "test" / "caltechpedestriandataset"
     rows = []
-    for m, seq in itertools.product(models, TRACK_SEQS):
+    for m, seq in itertools.product(models, longest_sequences()):
         folder = root / seq.split("_")[0]
         res = run_tracking(detectors[m], iter_frames(str(folder), f"{seq}_*"), conf=0.3, tracker=SortTracker())
         if not res:
@@ -163,8 +168,8 @@ def main() -> None:
             if not images:
                 continue
             per_image, ms = collect(det, images)
-            for subset, min_h in (("all", 0.0), ("reasonable", 50.0)):
-                if ds == "INRIA" and subset == "reasonable":
+            for subset, min_h in (("all", 0.0), ("h60", 60.0)):
+                if ds == "INRIA" and subset == "h60":
                     continue
                 r = evaluate(per_image, min_h=min_h)
                 rows.append({"model": m, "title": det.info.title, "origin": det.info.origin, "dataset": ds,

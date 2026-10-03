@@ -48,9 +48,9 @@ def validate(model: PedNet, loader: DataLoader, device: str) -> dict:
         dets = decode(model(imgs.to(device)), stride=model.cfg.stride, conf=0.01)
         per_image += [(d.numpy(), b.numpy()) for d, b in zip(dets, boxes)]
     r = evaluate(per_image)
-    r50 = evaluate(per_image, min_h=50)
+    r60 = evaluate(per_image, min_h=60)  # GT in this Caltech version: h >= 75 px
     return {"val_ap50": r.ap50, "val_ap50_95": r.ap50_95, "val_precision": r.precision,
-            "val_recall": r.recall, "val_mr2_reasonable": r50.mr2}
+            "val_recall": r.recall, "val_mr2": r60.mr2}
 
 
 def main() -> None:
@@ -94,7 +94,7 @@ def main() -> None:
 
     history_path = out_dir / "history.csv"
     fields = ["epoch", "time_s", "lr", "loss", "hm", "size", "off",
-              "val_ap50", "val_ap50_95", "val_precision", "val_recall", "val_mr2_reasonable"]
+              "val_ap50", "val_ap50_95", "val_precision", "val_recall", "val_mr2"]
     if not a.resume:
         with history_path.open("w", newline="") as f:
             csv.DictWriter(f, fields).writeheader()
@@ -118,7 +118,7 @@ def main() -> None:
             torch.nn.utils.clip_grad_norm_(model.parameters(), 10.0)
             opt.step()
             for k in sums:
-                sums[k] += float(losses[k])
+                sums[k] += losses[k].item()
             it += 1
             if bi % 50 == 0:
                 print(f"ep {epoch + 1}/{a.epochs} it {bi}/{len(train_dl)} loss {float(losses['loss']):.3f} "

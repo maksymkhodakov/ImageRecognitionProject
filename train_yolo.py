@@ -58,7 +58,12 @@ def write_subset_yaml(cfg: TrainConfig) -> Path:
     return yaml_path
 
 
-def main(cfg: TrainConfig) -> None:
+def main(cfg: TrainConfig, resume: str = "") -> None:
+    if resume:  # continue an interrupted run from its last.pt
+        model = YOLO(resume)
+        model.train(resume=True)
+        export_best(model, cfg)
+        return
     data_yaml = write_subset_yaml(cfg)
     model = YOLO(cfg.base_model)
     model.train(
@@ -77,14 +82,17 @@ def main(cfg: TrainConfig) -> None:
         seed=0,
         plots=True,
     )
+    export_best(model, cfg)
 
+
+def export_best(model: YOLO, cfg: TrainConfig) -> None:
     best = Path(model.trainer.save_dir) / "weights" / "best.pt"
     if best.exists():
         shutil.copy(best, cfg.export_to)
         print(f"\nTraining finished. Best weights copied to {cfg.export_to}")
 
 
-def parse_args() -> TrainConfig:
+def parse_args() -> tuple[str, TrainConfig]:
     d = TrainConfig()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--base-model", default=d.base_model)
@@ -98,8 +106,9 @@ def parse_args() -> TrainConfig:
     ap.add_argument("--workers", type=int, default=d.workers)
     ap.add_argument("--name", default=d.name)
     ap.add_argument("--export-to", default=d.export_to)
+    ap.add_argument("--resume", default="", help="path to last.pt of an interrupted run")
     a = ap.parse_args()
-    return TrainConfig(
+    return a.resume, TrainConfig(
         base_model=a.base_model, epochs=a.epochs, imgsz=a.imgsz, batch=a.batch,
         train_step=a.train_step, val_step=a.val_step, patience=a.patience,
         device=a.device, workers=a.workers, name=a.name, export_to=a.export_to,
@@ -107,4 +116,5 @@ def parse_args() -> TrainConfig:
 
 
 if __name__ == "__main__":
-    main(parse_args())
+    resume_from, config = parse_args()
+    main(config, resume_from)

@@ -107,7 +107,7 @@ def build_targets(boxes: np.ndarray, out_hw: tuple[int, int], stride: int, max_o
         cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
         ix, iy = min(int(cx), W - 1), min(int(cy), H - 1)
         r = max(0.0, gaussian_radius(h, w))
-        draw_gaussian(hm, ix, iy, max(0.0, r * min(1.0, w / h) ** 0.5), max(0.0, r))
+        draw_gaussian(hm, ix, iy, max(1.0, r * min(1.0, w / h) ** 0.5), max(1.0, r))
         size[k] = (math.log(w), math.log(h))
         off[k] = (cx - ix, cy - iy)
         ind[k] = iy * W + ix
