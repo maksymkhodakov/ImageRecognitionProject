@@ -8,7 +8,7 @@
   * історія (втрати та метрики по епохах) пишеться в runs/pednet/history.csv.
 
 Приклади:
-    python train_pednet.py --epochs 25
+    python train_pednet.py --epochs 15
     python train_pednet.py --epochs 1 --limit 200      # швидка перевірка, що все працює
 """
 from __future__ import annotations
@@ -31,7 +31,7 @@ from pedestrian.pednet import PedNet, PedNetConfig, count_parameters, decode, pe
 
 def parse_args():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--epochs", type=int, default=25)
+    ap.add_argument("--epochs", type=int, default=15)
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--lr", type=float, default=1.5e-3)
     ap.add_argument("--weight-decay", type=float, default=1e-4)

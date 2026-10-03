@@ -17,7 +17,7 @@ pip install -r requirements.txt
 
 python prepare_inria.py                  # INRIA -> YOLO-формат (dataset/inria)
 python train_yolo.py --epochs 12         # fine-tune YOLOv8n  -> models/yolo_caltech_v8n.pt
-python train_pednet.py --epochs 25       # навчання PedNet     -> models/pednet_best.pt
+python train_pednet.py --epochs 15       # навчання PedNet     -> models/pednet_best.pt
 python evaluate.py                       # метрики та графіки  -> reports/
 
 # трекінг послідовності кадрів -> JSON/CSV (+ відео)
