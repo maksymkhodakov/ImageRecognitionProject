@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 
 from pedestrian.data import CALTECH_ROOT, INRIA_ROOT, list_images, read_boxes
-from pedestrian.detectors import MODEL_ZOO, available_models, load_detector
+from pedestrian.detectors import MODEL_ZOO, available_models, default_conf, load_detector
 from pedestrian.metrics import evaluate
 from pedestrian.sort_tracker import SortTracker
 from pedestrian.viz import draw_detections
@@ -80,7 +80,7 @@ def plot_curves(curves: dict, ds: str) -> None:
 
 def plot_speed(df: pd.DataFrame) -> None:
     """Горизонтальна діаграма часу обробки кадру для кожної моделі."""
-    d = df[df.dataset == "Caltech"].sort_values("ms_per_frame")
+    d = df[(df.dataset == "Caltech") & (df.subset == "all")].sort_values("ms_per_frame")
     fig, ax = plt.subplots(figsize=(7, 3.2))
     ax.barh([SHORT[m] for m in d.model], d.ms_per_frame, color=[COLORS[m] for m in d.model])
     for i, v in enumerate(d.ms_per_frame):
@@ -133,8 +133,11 @@ def save_samples(models: list[str], detectors: dict, n: int = 4) -> None:
         frame = cv2.imread(str(p))
         tiles = []
         for m in models:
-            vis = draw_detections(frame, detectors[m].predict(frame, 0.3, 0.5))
-            cv2.putText(vis, SHORT[m], (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+            vis = draw_detections(frame, detectors[m].predict(frame, default_conf(m), 0.5))
+            # назва моделі на темній плашці, щоб підпис читався на будь-якому фоні
+            (tw, th), _ = cv2.getTextSize(SHORT[m], cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+            cv2.rectangle(vis, (0, 0), (tw + 16, th + 16), (30, 30, 30), -1)
+            cv2.putText(vis, SHORT[m], (8, th + 8), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
             tiles.append(cv2.resize(vis, (640, int(640 * frame.shape[0] / frame.shape[1]))))
         grid = [np.hstack(tiles[i:i + 2]) for i in range(0, len(tiles), 2)]
         if len(grid) > 1 and grid[-1].shape != grid[0].shape:
@@ -155,7 +158,8 @@ def tracking_eval(models: list[str], detectors: dict) -> pd.DataFrame:
     rows = []
     for m, seq in itertools.product(models, longest_sequences()):
         folder = root / seq.split("_")[0]
-        res = run_tracking(detectors[m], iter_frames(str(folder), f"{seq}_*"), conf=0.3, tracker=SortTracker())
+        res = run_tracking(detectors[m], iter_frames(str(folder), f"{seq}_*"), conf=default_conf(m),
+                           tracker=SortTracker())
         if not res:
             continue
         rows.append({"model": m, "sequence": seq, **track_stats(res)})

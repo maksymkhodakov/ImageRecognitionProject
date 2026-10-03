@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 
 from pedestrian.data import IMG_EXTS
-from pedestrian.detectors import MODEL_ZOO, Detector, load_detector
+from pedestrian.detectors import MODEL_ZOO, Detector, default_conf, load_detector
 from pedestrian.sort_tracker import SortTracker
 from pedestrian.viz import draw_tracks
 
@@ -99,7 +99,8 @@ def main() -> None:
     ap.add_argument("--source", required=True, help="folder with frames or a video file")
     ap.add_argument("--pattern", default="*", help="glob for frames inside the folder")
     ap.add_argument("--model", default="pednet", choices=list(MODEL_ZOO))
-    ap.add_argument("--conf", type=float, default=0.3)
+    ap.add_argument("--conf", type=float, default=None,
+                    help="поріг впевненості; за замовчуванням — оптимальний для моделі з reports/metrics.csv")
     ap.add_argument("--iou", type=float, default=0.5)
     ap.add_argument("--max-age", type=int, default=15)
     ap.add_argument("--min-hits", type=int, default=2)
@@ -109,6 +110,7 @@ def main() -> None:
     a = ap.parse_args()
 
     det = load_detector(a.model)
+    conf = a.conf if a.conf is not None else default_conf(a.model)
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     writer = None
@@ -123,7 +125,7 @@ def main() -> None:
                 writer = cv2.VideoWriter(str(out.with_suffix(".mp4")), cv2.VideoWriter_fourcc(*"mp4v"), a.fps, (w, h))
             writer.write(vis)
 
-    results = run_tracking(det, iter_frames(a.source, a.pattern), a.conf, a.iou,
+    results = run_tracking(det, iter_frames(a.source, a.pattern), conf, a.iou,
                            SortTracker(a.max_age, a.min_hits), on_frame)
     if writer is not None:
         writer.release()

@@ -127,6 +127,22 @@ def load_detector(key: str, device: str | None = None) -> Detector:
     return PedNetDetector(info, device) if info.kind == "pednet" else YOLODetector(info, device)
 
 
+def default_conf(key: str, fallback: float = 0.3) -> float:
+    """Рекомендований поріг впевненості для моделі — точка максимального F1 на Caltech test.
+
+    Береться з reports/metrics.csv (створює evaluate.py). Різні моделі мають різну «шкалу»
+    впевненості: піки heatmap PedNet рідко сягають 1.0, тому спільний поріг для всіх не оптимальний.
+    """
+    p = Path("reports/metrics.csv")
+    if not p.exists():
+        return fallback
+    import pandas as pd
+
+    df = pd.read_csv(p)
+    row = df[(df.model == key) & (df.dataset == "Caltech") & (df.subset == "all")]
+    return round(float(row.best_conf.iloc[0]), 2) if len(row) else fallback
+
+
 def available_models() -> list[str]:
     """Ключі моделей, файли ваг яких уже є на диску."""
     return [k for k, m in MODEL_ZOO.items() if Path(m.path).exists()]

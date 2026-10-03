@@ -23,7 +23,7 @@ import pandas as pd
 import streamlit as st
 
 from pedestrian.data import CALTECH_ROOT, IMG_EXTS, INRIA_ROOT, list_images
-from pedestrian.detectors import MODEL_ZOO, ORIGIN_LABELS, available_models, load_detector
+from pedestrian.detectors import MODEL_ZOO, ORIGIN_LABELS, available_models, default_conf, load_detector
 from pedestrian.device import pick_device
 from pedestrian.sort_tracker import SortTracker
 from pedestrian.viz import draw_detections, draw_tracks
@@ -139,8 +139,11 @@ with st.sidebar:
     st.caption(info.description)
 
     st.divider()
-    conf = st.slider("Поріг впевненості", 0.05, 0.95, 0.30, 0.05,
-                     help="Мінімальна впевненість моделі, щоб вважати прямокутник пішоходом.")
+    # окремий ключ слайдера для кожної моделі: при зміні моделі підставляється її оптимальний поріг
+    conf = st.slider("Поріг впевненості", 0.05, 0.95, min(0.95, max(0.05, default_conf(model_key))), 0.01,
+                     key=f"conf_{model_key}",
+                     help="Мінімальна впевненість, щоб вважати прямокутник пішоходом. За замовчуванням — "
+                          "поріг з найкращим F1 на тестовій вибірці Caltech для обраної моделі.")
     iou = st.slider("Поріг NMS (IoU)", 0.1, 0.9, 0.5, 0.05,
                     help="Прямокутники, що перекриваються сильніше, зливаються в один.")
     with st.expander("Параметри трекера SORT"):
@@ -498,10 +501,10 @@ with tabs[5]:
             m[0].metric("Епох", int(last.epoch), border=True)
             m[1].metric("Найкращий val AP50", f"{h.val_ap50.max():.3f}", border=True)
             m[2].metric("Час епохи", f"{h.time_s.mean() / 60:.1f} хв", border=True)
-            long = h.melt("epoch", ["hm", "size", "off"], var_name="компонента", value_name="loss")
+            long = h.melt("epoch", ["hm", "size", "off"], var_name="компонента", value_name="втрата")
             st.altair_chart(alt.Chart(long).mark_line(point=True).encode(
-                x="epoch:Q", y=alt.Y("loss:Q", title="Loss"), color=alt.Color("компонента:N", legend=alt.Legend(orient="bottom")),
-                tooltip=["epoch", "компонента", alt.Tooltip("loss:Q", format=".3f")]).properties(height=240),
+                x="epoch:Q", y=alt.Y("втрата:Q", title="Loss"), color=alt.Color("компонента:N", legend=alt.Legend(orient="bottom")),
+                tooltip=["epoch", "компонента", alt.Tooltip("втрата:Q", format=".3f")]).properties(height=240),
                 use_container_width=True)
             st.altair_chart(alt.Chart(h).mark_line(point=True, color="#2a78d6").encode(
                 x="epoch:Q", y=alt.Y("val_ap50:Q", title="val AP50"),
@@ -519,10 +522,10 @@ with tabs[5]:
             m[1].metric("Найкращий val mAP50", f"{y['metrics/mAP50(B)'].max():.3f}", border=True)
             m[2].metric("mAP50-95", f"{y['metrics/mAP50-95(B)'].max():.3f}", border=True)
             long = y.melt("epoch", ["train/box_loss", "train/cls_loss", "train/dfl_loss"],
-                          var_name="компонента", value_name="loss")
+                          var_name="компонента", value_name="втрата")
             st.altair_chart(alt.Chart(long).mark_line(point=True).encode(
-                x="epoch:Q", y="loss:Q", color=alt.Color("компонента:N", legend=alt.Legend(orient="bottom")),
-                tooltip=["epoch", "компонента", alt.Tooltip("loss:Q", format=".3f")]).properties(height=240),
+                x="epoch:Q", y=alt.Y("втрата:Q", title="Loss"), color=alt.Color("компонента:N", legend=alt.Legend(orient="bottom")),
+                tooltip=["epoch", "компонента", alt.Tooltip("втрата:Q", format=".3f")]).properties(height=240),
                 use_container_width=True)
             st.altair_chart(alt.Chart(y).mark_line(point=True, color="#e0702b").encode(
                 x="epoch:Q", y=alt.Y("metrics/mAP50(B):Q", title="val mAP50"),
@@ -537,7 +540,9 @@ with tabs[5]:
         t = pd.read_csv(tr)
         t["model"] = t.model.map(MODEL_SHORT)
         st.dataframe(t, hide_index=True, width="stretch",
-                     column_config={"avg_track_len": st.column_config.NumberColumn("Сер. довжина треку", format="%.1f"),
+                     column_config={"model": "Детектор", "sequence": "Послідовність", "frames": "Кадрів",
+                                    "tracks": "Треків", "max_people": "Макс. у кадрі",
+                                    "avg_track_len": st.column_config.NumberColumn("Сер. довжина треку", format="%.1f"),
                                     "avg_people": st.column_config.NumberColumn("Сер. пішоходів/кадр", format="%.2f"),
                                     "avg_ms": st.column_config.NumberColumn("мс/кадр", format="%.1f"),
                                     "fps": st.column_config.NumberColumn("FPS", format="%.1f")})

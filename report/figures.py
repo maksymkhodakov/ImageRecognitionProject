@@ -130,3 +130,26 @@ if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
     pipeline(); architecture(); dataset_examples(); heatmap_demo()
     print("figures ->", OUT)
+
+
+def tracking_strip(model_key: str = "pednet", seq: str = "set07_V011", frames=(120, 180, 240)):
+    """Три кадри однієї послідовності з треками та траєкторіями (для розділу 4.5 звіту)."""
+    from pedestrian.detectors import default_conf, load_detector
+    from pedestrian.sort_tracker import SortTracker
+    from pedestrian.viz import draw_tracks
+
+    det = load_detector(model_key)
+    files = sorted((CALTECH_ROOT / "images" / "test" / "caltechpedestriandataset" / seq[:5]).glob(f"{seq}_*.png"))
+    tracker, picked = SortTracker(), []
+    for i, f in enumerate(files[:max(frames) + 1]):
+        img = cv2.imread(str(f))
+        tracks = tracker.update(det.predict(img, default_conf(model_key), 0.5))
+        if i in frames:
+            vis = draw_tracks(img, tracks, tracker.trails())
+            picked.append(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
+    fig, axes = plt.subplots(1, len(picked), figsize=(15, 3.9))
+    for ax, im, i in zip(axes, picked, frames):
+        ax.imshow(im); ax.axis("off"); ax.set_title(f"{seq}, кадр {i}", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(OUT / f"tracking_{seq}.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
