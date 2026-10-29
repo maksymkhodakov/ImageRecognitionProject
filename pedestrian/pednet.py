@@ -147,7 +147,10 @@ class PedNet(nn.Module):
         self.off = Head(c, hc, 2)
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        # x: (B, 3, 480, 640) -> C2..C5 -> FPN -> p: (B, 96, 120, 160)
         p = self.neck(self.backbone(x))
+        # Усі три голови працюють на одній карті p; виходи — «сирі» логіти без активації:
+        # sigmoid для heatmap застосовується у focal_loss/decode, exp для size — у decode.
         return {"hm": self.hm(p), "size": self.size(p), "off": self.off(p)}
 
     # ------------------------------------------------------------ чекпойнти
@@ -202,7 +205,9 @@ def pednet_loss(out: dict, t: dict, w_size: float = 1.0, w_off: float = 1.0) -> 
     mask відмічає реальні об'єкти серед max_objs слотів (решта — заповнення нулями).
     Повертає словник: "loss" для backward та окремі компоненти для логування.
     """
-    l_hm = focal_loss(out["hm"], t["hm"])
+    l_hm = focal_loss(out["hm"], t["hm"])  # навчається на всіх комірках карти
+    # розмір і зсув навчаються лише в центрах реальних пішоходів: gather дістає передбачення
+    # з комірок ind, маска обнуляє порожні слоти, сума ділиться на кількість пішоходів у батчі
     m = t["mask"].unsqueeze(-1)
     n = m.sum().clamp(min=1)
     l_size = (F.l1_loss(gather(out["size"], t["ind"]), t["size"], reduction="none") * m).sum() / n
@@ -224,15 +229,19 @@ def decode(out: dict, stride: int = 4, conf: float = 0.05, top_k: int = 100,
     5. додатковий NMS прибирає дублікати перекритих пішоходів.
     Повертає список (по одному на зображення) тензорів (N, 5): x1, y1, x2, y2, score у пікселях входу.
     """
-    hm = out["hm"].sigmoid()
+    hm = out["hm"].sigmoid()  # (B, 1, H, W): логіти -> ймовірності 0..1
+    # max_pool 3x3 з кроком 1 залишає розмір карти; рівність hm == maxpool(hm) істинна лише в
+    # локальних максимумах, тож усі «схили» гаусіана навколо піку обнуляються
     peaks = (F.max_pool2d(hm, 3, 1, 1) == hm).float() * hm
     b, _, H, W = hm.shape
+    # inds — лінійні індекси комірок y * W + x, відсортовані за спаданням впевненості
     scores, inds = peaks.view(b, -1).topk(min(top_k, H * W))
-    size = gather(out["size"], inds).exp()
-    off = gather(out["off"], inds)
-    xs = (inds % W).float() + off[..., 0]
+    size = gather(out["size"], inds).exp()  # мережа передбачає log(w), log(h) -> повертаємо exp
+    off = gather(out["off"], inds)          # субпіксельний зсув центру в межах комірки
+    xs = (inds % W).float() + off[..., 0]   # координати центру в комірках вихідної карти
     ys = (inds // W).float() + off[..., 1]
     w, h = size[..., 0], size[..., 1]
+    # (центр, розмір) -> кути; множення на stride переводить комірки в пікселі входу мережі
     boxes = torch.stack([xs - w / 2, ys - h / 2, xs + w / 2, ys + h / 2], -1) * stride
     result = []
     for i in range(b):

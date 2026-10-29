@@ -38,6 +38,7 @@ def kaggle_auth_header() -> str:
 
 
 def download(dst: Path) -> Path:
+    """Завантажує zip-архів датасету через Kaggle API (curl з заголовком авторизації)."""
     dst.parent.mkdir(parents=True, exist_ok=True)
     url = f"https://www.kaggle.com/api/v1/datasets/download/{KAGGLE_REF}"
     print(f"Downloading {KAGGLE_REF} -> {dst}")
@@ -71,6 +72,7 @@ def convert(archive: Path, split: str = "Test") -> int:
         for ann in sorted(x for x in names if f"{split}/Annotations/" in x and x.endswith(".xml")):
             w, h, boxes = parse_voc(zf.read(ann))
             stem = Path(ann).stem
+            # зображення шукаємо за тим самим ім'ям, що й XML (розширення може бути .png або .jpg)
             img_name = next((x for x in names if f"{split}/JPEGImages/{stem}." in x), None)
             if img_name is None:
                 continue
@@ -83,6 +85,8 @@ def convert(archive: Path, split: str = "Test") -> int:
                 lines.append(f"0 {(x1 + x2) / 2 / w:.6f} {(y1 + y2) / 2 / h:.6f} {(x2 - x1) / w:.6f} {(y2 - y1) / h:.6f}")
             (lbl_out / f"{Path(img_name).stem}.txt").write_text("\n".join(lines) + ("\n" if lines else ""))
             n += 1
+    # data.yaml для Ultralytics (наприклад, `yolo val data=dataset/inria.yaml`); INRIA — лише тест,
+    # тому train/val/test вказують на ту саму папку
     (OUT_DIR.parent / "inria.yaml").write_text(
         f"path: {OUT_DIR.resolve()}\ntrain: images/test\nval: images/test\ntest: images/test\nnc: 1\nnames: ['person']\n"
     )

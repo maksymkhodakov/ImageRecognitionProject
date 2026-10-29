@@ -5,6 +5,21 @@
 та кожен `--val-step`-й — для валідації (списки файлів пишуться в dataset/lists/).
 Навчання виконує бібліотека Ultralytics; ми лише готуємо дані й параметри.
 
+Архітектура YOLOv8n (n = nano, найменша версія, ~3 млн параметрів):
+    backbone  CSPDarknet з блоками C2f і SPPF — карти ознак з кроками 8, 16, 32;
+    neck      PAN-FPN: шлях згори вниз (семантика) + знизу вгору (локалізація);
+    head      anchor-free, розділені (decoupled) гілки класифікації та регресії на кожному
+              з трьох масштабів; рамка кодується як розподіл відстаней до чотирьох сторін (DFL).
+Функція втрат: BCE (клас) + CIoU + DFL (рамка); цілі призначає TaskAlignedAssigner.
+
+Що змінюється при донавчанні:
+    * стартові ваги — YOLOv8n, навчена на COCO (80 класів), тобто весь детектор уже вміє
+      знаходити людей; single_cls=True перетворює голову класифікації на один клас person;
+    * аугментації Ultralytics за замовчуванням: mosaic (4 кадри в одному), HSV-зсуви
+      (h 0.015, s 0.7, v 0.4), горизонтальний фліп 0.5, масштаб ±50 %, зсув ±10 %;
+      mosaic вимикається на останніх 10 епохах (close_mosaic), щоб модель звикла до «чистих» кадрів;
+    * optimizer=auto: для короткого навчання Ultralytics обирає AdamW (у нас lr = 0.002).
+
 Приклади:
     python train_yolo.py --epochs 12 --name caltech_v8n_e20
     python train_yolo.py --resume runs/detect/runs/yolo/caltech_v8n_e20/weights/last.pt
@@ -25,13 +40,13 @@ from pedestrian.device import pick_device
 @dataclass(frozen=True)
 class TrainConfig:
     """Параметри навчання (значення за замовчуванням — ті, з якими навчено модель у звіті)."""
-    base_model: str = "models/yolov8n.pt"
+    base_model: str = "models/yolov8n.pt"  # стартові ваги COCO (завантажуються Ultralytics автоматично)
     epochs: int = 12
-    imgsz: int = 640
+    imgsz: int = 640       # довша сторона кадру; 640x480 Caltech доповнюється letterbox до квадрата
     batch: int = 16
-    train_step: int = 2
-    val_step: int = 4
-    patience: int = 8
+    train_step: int = 2    # кожен 2-й кадр train (сусідні кадри відео майже дублікати)
+    val_step: int = 4      # кожен 4-й кадр val
+    patience: int = 8      # рання зупинка, якщо val mAP не покращується 8 епох поспіль
     device: str = pick_device()
     workers: int = 6
     project: str = "runs/yolo"
@@ -51,6 +66,8 @@ def write_subset_yaml(cfg: TrainConfig) -> Path:
         paths[split] = p.resolve()
         print(f"{split}: {len(imgs)} images -> {p}")
 
+    # Ultralytics приймає замість папки txt-файл зі списком зображень; розмітку він знаходить сам,
+    # замінивши в кожному шляху images/ на labels/ і розширення на .txt (стандарт YOLO)
     yaml_path = out_dir / "caltech_subset.yaml"
     yaml_path.write_text(
         f"train: {paths['train']}\n"
@@ -69,6 +86,8 @@ def main(cfg: TrainConfig, resume: str = "") -> None:
         return
     data_yaml = write_subset_yaml(cfg)
     model = YOLO(cfg.base_model)
+    # Увесь цикл навчання (аугментації, призначення цілей, втрати, валідація, збереження
+    # best.pt/last.pt і графіків) виконується всередині model.train()
     model.train(
         data=str(data_yaml),
         epochs=cfg.epochs,
@@ -82,8 +101,8 @@ def main(cfg: TrainConfig, resume: str = "") -> None:
         project=cfg.project,
         name=cfg.name,
         exist_ok=True,
-        seed=0,
-        plots=True,
+        seed=0,             # відтворюваність
+        plots=True,         # криві навчання, матриця помилок, приклади батчів у save_dir
     )
     export_best(model, cfg)
 

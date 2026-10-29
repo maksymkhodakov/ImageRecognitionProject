@@ -58,8 +58,9 @@ def run_tracking(detector: Detector, frames, conf: float = 0.3, iou: float = 0.5
     results = []
     for idx, (name, frame) in enumerate(frames):
         t0 = time.perf_counter()
-        dets = detector.predict(frame, conf, iou)
-        tracks = tracker.update(dets)
+        dets = detector.predict(frame, conf, iou)  # (N, 5) детекції цього кадру, без ID
+        tracks = tracker.update(dets)              # (M, 6) підтверджені треки з постійними ID
+        # ms — повний час кадру: пре/постобробка, мережа і трекер
         ms = (time.perf_counter() - t0) * 1000
         rec = {
             "frame": idx, "file": name, "ms": round(ms, 2),

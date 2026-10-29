@@ -59,7 +59,9 @@ def validate(model: PedNet, loader: DataLoader, device: str) -> dict:
         dets = decode(model(imgs.to(device)), stride=model.cfg.stride, conf=0.01)
         per_image += [(d.numpy(), b.numpy()) for d, b in zip(dets, boxes)]
     r = evaluate(per_image)
-    r60 = evaluate(per_image, min_h=60)  # GT in this Caltech version: h >= 75 px
+    # MR^-2 — за протоколом h60: у цій збірці Caltech розмічено лише пішоходів висотою >= 75 px,
+    # тож незіставлені детекції нижчі за 60 px (75 / 1.25) не рахуються хибними
+    r60 = evaluate(per_image, min_h=60)
     return {"val_ap50": r.ap50, "val_ap50_95": r.ap50_95, "val_precision": r.precision,
             "val_recall": r.recall, "val_mr2": r60.mr2}
 
@@ -80,6 +82,8 @@ def main() -> None:
     size = (cfg.input_w, cfg.input_h)
     train_ds = PedestrianDataset(train_imgs, size, cfg.stride, augment=True)
     val_ds = PedestrianDataset(val_imgs, size, cfg.stride, augment=False)
+    # Завантаження й аугментація кадрів — у фонових процесах (workers), щоб GPU не чекав на CPU;
+    # persistent_workers не перезапускає процеси на кожній епосі
     kw = dict(num_workers=a.workers, collate_fn=collate, persistent_workers=a.workers > 0)
     train_dl = DataLoader(train_ds, a.batch, shuffle=True, drop_last=True, **kw)
     val_dl = DataLoader(val_ds, a.batch, shuffle=False, **kw)
@@ -99,7 +103,7 @@ def main() -> None:
     total_iters = a.epochs * len(train_dl)
 
     start_epoch, best_ap = 0, -1.0
-    if a.resume:
+    if a.resume:  # продовження з last.pt: ваги, стан оптимізатора (моменти AdamW) і номер епохи
         ck = torch.load(a.resume, map_location="cpu", weights_only=False)
         model.load_state_dict(ck["state_dict"])
         opt.load_state_dict(ck["optimizer"])
@@ -112,9 +116,9 @@ def main() -> None:
         with history_path.open("w", newline="") as f:
             csv.DictWriter(f, fields).writeheader()
 
-    it = start_epoch * len(train_dl)
+    it = start_epoch * len(train_dl)  # глобальний номер ітерації — для розкладу learning rate
     for epoch in range(start_epoch, a.epochs):
-        model.train()
+        model.train()  # BatchNorm оновлює статистики батча
         t0 = time.time()
         sums = {"loss": 0.0, "hm": 0.0, "size": 0.0, "off": 0.0}
         for bi, (imgs, t, _) in enumerate(train_dl):

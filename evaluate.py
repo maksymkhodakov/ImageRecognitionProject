@@ -49,6 +49,8 @@ def collect(det, images: list[Path], warmup: int = 5):
     per_image, times = [], []
     for i, p in enumerate(images):
         img = cv2.imread(str(p))
+        # майже нульовий поріг: потрібні всі детекції, щоб побудувати повну криву PR / MR–FPPI;
+        # робочий поріг (best_conf) потім обирається як точка максимального F1
         boxes, ms = det.timed_predict(img, conf=0.001, iou=0.5)
         if i >= warmup:
             times.append(ms)
